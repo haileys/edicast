@@ -1,0 +1,7 @@
+[package]
+name = "edicast"
+version = "0.1.0"
+authors = ["Hailey Somerville <hailey@hailey.lol>"]
+edition = "2018"
+
+[dependencies]
