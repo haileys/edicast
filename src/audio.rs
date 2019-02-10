@@ -3,6 +3,7 @@ pub mod decode;
 
 #[derive(Clone)]
 pub struct PcmData {
-    pub left: Box<[i16]>,
-    pub right: Box<[i16]>,
+    pub sample_rate: usize,
+    pub channels: usize,
+    pub samples: Box<[i16]>,
 }

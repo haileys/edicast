@@ -13,12 +13,6 @@ pub fn from_config(config: &CodecConfig) -> Box<Codec> {
     }
 }
 
-pub fn header_from_config(config: &CodecConfig) -> Box<[u8]> {
-    match config {
-        CodecConfig::Mp3(_) => Box::new([]),
-    }
-}
-
 pub fn mime_type_from_config(config: &CodecConfig) -> &'static str {
     match config {
         CodecConfig::Mp3(_) => "audio/mpeg",
@@ -41,12 +35,27 @@ impl Mp3 {
 
 impl Codec for Mp3 {
     fn encode(&mut self, data: &PcmData) -> Box<[u8]> {
-        let num_samples = data.left.len();
+        // we must deinterleave audio data for LAME and discard channels beyond
+        // stereo. LAME does have an interleaved encode function, but it still
+        // bakes in 2 channel left/right assumptions which makes it unsafe to
+        // generalise for arbitrary PcmData which may have >2 channels
+        let mut left = Vec::new();
+        let mut right = Vec::new();
+
+        if data.channels == 1 {
+            left = data.samples.to_vec();
+            right = data.samples.to_vec();
+        } else {
+            for chunk in data.samples.chunks(data.channels) {
+                left.push(chunk[0]);
+                right.push(chunk[1]);
+            }
+        }
 
         // vector size calculation is a suggestion from lame/lame.h:
-        let mut mp3buff: Vec<u8> = vec![0; (num_samples * 5) / 4 + 7200];
+        let mut mp3buff: Vec<u8> = vec![0; (left.len() * 5) / 4 + 7200];
 
-        match self.lame.encode(&data.left, &data.right, &mut mp3buff) {
+        match self.lame.encode(&left, &right, &mut mp3buff) {
             Ok(sz) => {
                 mp3buff.resize(sz, 0);
                 mp3buff.into_boxed_slice()

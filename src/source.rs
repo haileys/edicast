@@ -64,10 +64,9 @@ fn source_thread_main(source: Source) {
         OfflineBehaviour::Silence => {
             let silence_duration = Duration::from_millis(100);
             let silence = Arc::new(PcmData {
-                // silence_duration is 100 milliseconds, so make 4,410 samples
-                // of zero (assuming sample rate is 44.1 kHz)
-                left: Box::new([0i16; 4410]),
-                right: Box::new([0i16; 4410]),
+                sample_rate: 44100,
+                channels: 2,
+                samples: Box::new([0i16; 44100 / 10 * 2]),
             });
 
             loop {
