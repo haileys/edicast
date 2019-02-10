@@ -1,11 +1,13 @@
 use std::collections::HashMap;
+use std::io;
 
 use crate::config::Config;
 use crate::source::SourceSet;
 use crate::stream::StreamSet;
 
-mod public;
+mod common;
 mod control;
+mod public;
 
 // fn start_http_interfaces(config: &Config) -> Receiver<HttpAction> {
 //     let (tx, rx) = sync_sender(0);
@@ -42,6 +44,15 @@ pub enum StartError {
     Bind(tiny_http::NewServerError),
 }
 
+fn handle_dispatch_error(result: Result<(), io::Error>) {
+    match result {
+        Ok(()) => {}
+        Err(e) => {
+            eprintln!("broken write to http client! {:?}", e);
+        }
+    }
+}
+
 pub fn run(config: Config) -> Result<(), StartError> {
     let public = tiny_http::Server::http(&config.listen.public)
         .map_err(StartError::Bind)?;
@@ -55,13 +66,18 @@ pub fn run(config: Config) -> Result<(), StartError> {
         scope.spawn(|scope| {
             for req in public.incoming_requests() {
                 let edicast_ref = &edicast;
-                scope.spawn(move |_| public::dispatch(req, edicast_ref));
+                scope.spawn(move |_|
+                    handle_dispatch_error(
+                        public::dispatch(req, edicast_ref)));
             }
         });
 
         scope.spawn(|scope| {
             for req in control.incoming_requests() {
-                scope.spawn(move |_| control::dispatch(req));
+                let edicast_ref = &edicast;
+                scope.spawn(move |_|
+                    handle_dispatch_error(
+                        control::dispatch(req, edicast_ref)));
             }
         });
 

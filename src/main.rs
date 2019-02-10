@@ -4,6 +4,7 @@ extern crate serde_derive;
 extern crate crossbeam;
 extern crate lame;
 extern crate minimp3;
+extern crate percent_encoding;
 extern crate serde;
 extern crate tiny_http;
 extern crate toml;
@@ -32,7 +33,7 @@ fn config_path() -> PathBuf {
     match env::args_os().nth(1) {
         Some(path) => path.into(),
         None => {
-            eprintln!("usage: rustcast <config file>");
+            eprintln!("usage: edicast <config file>");
             process::exit(1);
         }
     }

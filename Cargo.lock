@@ -106,6 +106,7 @@ dependencies = [
  "crossbeam 0.7.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "lame 0.1.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "minimp3 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "percent-encoding 1.0.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde 1.0.87 (registry+https://github.com/rust-lang/crates.io-index)",
  "serde_derive 1.0.87 (registry+https://github.com/rust-lang/crates.io-index)",
  "tiny_http 0.6.2 (git+https://github.com/haileysome/tiny-http)",

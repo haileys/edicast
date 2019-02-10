@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::mpsc::{sync_channel, SyncSender, Receiver};
 use std::time::{Instant, Duration};
 use std::thread;
 
@@ -8,8 +9,6 @@ use crate::audio::decode::{PcmRead, PcmReadError};
 use crate::config::{OfflineBehaviour, SourceConfig};
 use crate::fanout::{live_channel, LivePublisher, LiveSubscriber, LiveSubscription};
 use crate::sync::{rendezvous, RendezvousReceiver, RendezvousSender, RecvError, RecvTimeoutError, SendError};
-
-struct NewSource(Box<PcmRead + Send>);
 
 pub enum ConnectSourceError {
     AlreadyConnected,
@@ -51,12 +50,25 @@ impl SourceSet {
         }
     }
 
-    pub fn connect_source(&self, name: &str, io: Box<PcmRead + Send>) -> Result<(), ConnectSourceError> {
+    // This method does not start the source stream directly, but instead
+    // expresses intention to start streaming. The object returned allows the
+    // caller to either commit to begin streaming, or abort. This is used
+    // to reserve the source slot before the caller has a PcmRead available
+    // and allows the HTTP server to respond with the right headers in the case
+    // that a source stream could not begin without upgrading the connection.
+    pub fn connect_source(&self, name: &str) -> Result<StartSource, ConnectSourceError> {
         let source = self.sources.get(name)
             .ok_or(ConnectSourceError::NoSuchSource)?;
 
-        match source.command.send(NewSource(io)) {
-            Ok(()) => Ok(()),
+        let (tx, rx) = sync_channel(0);
+
+        match source.command.send(NewSource(rx)) {
+            Ok(()) => {
+                // the source thread is reserved busy for us
+                // return a handle to the connecting source to proceed and
+                // begin sending audio
+                Ok(StartSource { send: tx })
+            }
             Err(SendError::Busy) => Err(ConnectSourceError::AlreadyConnected),
             Err(SendError::Disconnected) => panic!("source thread died! wtf! we should restart it!"),
         }
@@ -67,6 +79,18 @@ impl SourceSet {
             .and_then(|source| source.output.subscribe().ok())
     }
 }
+
+pub struct StartSource {
+    send: SyncSender<Box<PcmRead + Send>>,
+}
+
+impl StartSource {
+    pub fn start(self, io: Box<PcmRead + Send>) -> Result<(), ()> {
+        self.send.send(io).map_err(|_| ())
+    }
+}
+
+struct NewSource(Receiver<Box<PcmRead + Send>>);
 
 struct Source {
     command: RendezvousSender<NewSource>,
@@ -97,11 +121,9 @@ fn source_thread_main(source: SourceThreadContext) {
                     duration += silence_duration;
 
                     match source.command.recv_deadline(epoch + duration) {
-                        Ok(mut cmd) => match *cmd {
-                            NewSource(ref mut io) => {
-                                run_source(&source, &mut **io);
-                                break 'silence_timer;
-                            }
+                        Ok(cmd) => match incoming_source(&source, &cmd) {
+                            Ok(()) => break 'silence_timer,
+                            Err(()) => {}
                         }
                         Err(RecvTimeoutError::Timeout) => {
                             source.output.publish(Arc::clone(&silence));
@@ -117,8 +139,8 @@ fn source_thread_main(source: SourceThreadContext) {
         OfflineBehaviour::Inactive => {
             loop {
                 match source.command.recv() {
-                    Ok(mut cmd) => match *cmd {
-                        NewSource(ref mut io) => run_source(&source, &mut **io),
+                    Ok(cmd) => {
+                        let _ = incoming_source(&source, &cmd);
                     }
                     Err(RecvError::Disconnected) => {
                         // sender end disconnected, exit thread
@@ -127,6 +149,16 @@ fn source_thread_main(source: SourceThreadContext) {
                 }
             }
         }
+    }
+}
+
+fn incoming_source(source: &SourceThreadContext, new_source: &NewSource) -> Result<(), ()> {
+    match new_source.0.recv() {
+        Ok(mut io) => {
+            run_source(source, &mut *io);
+            Ok(())
+        }
+        Err(_) => Err(())
     }
 }
 

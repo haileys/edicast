@@ -17,6 +17,12 @@ pub struct Mp3<T: Read> {
     mp3: minimp3::Decoder<T>,
 }
 
+impl<T: Read> Mp3<T> {
+    pub fn new(io: T) -> Self {
+        Mp3 { mp3: minimp3::Decoder::new(io) }
+    }
+}
+
 impl<T: Read> PcmRead for Mp3<T> {
     fn read(&mut self) -> Result<PcmData, PcmReadError> {
         match self.mp3.next_frame() {

@@ -1,17 +1,13 @@
 use std::io;
 
-use tiny_http::{Request, Response};
+use tiny_http::Request;
 
+use super::common::not_found;
 use super::Edicast;
 use crate::audio::encode;
 use crate::fanout::SubscribeError;
 
-fn not_found(req: Request) -> Result<(), io::Error> {
-    req.respond(Response::from_string("<h1>Not found</h1>")
-        .with_status_code(404))
-}
-
-fn dispatch_io(req: Request, edicast: &Edicast) -> Result<(), io::Error> {
+pub fn dispatch(req: Request, edicast: &Edicast) -> Result<(), io::Error> {
     let stream_id = match edicast.public_routes.get(req.url()) {
         Some(stream_id) => stream_id,
         None => return not_found(req),
@@ -35,15 +31,6 @@ fn dispatch_io(req: Request, edicast: &Edicast) -> Result<(), io::Error> {
                 // publisher went away, terminate stream
                 return Ok(());
             }
-        }
-    }
-}
-
-pub fn dispatch(req: Request, edicast: &Edicast) {
-    match dispatch_io(req, edicast) {
-        Ok(()) => {}
-        Err(e) => {
-            eprintln!("broken write to client: {:?}", e);
         }
     }
 }
