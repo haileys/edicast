@@ -6,18 +6,15 @@ use super::Edicast;
 use crate::audio::encode;
 use crate::fanout::SubscribeError;
 
-fn not_found(req: Request) {
+fn not_found(req: Request) -> Result<(), io::Error> {
     req.respond(Response::from_string("<h1>Not found</h1>")
-        .with_status_code(404));
+        .with_status_code(404))
 }
 
 fn dispatch_io(req: Request, edicast: &Edicast) -> Result<(), io::Error> {
     let stream_id = match edicast.public_routes.get(req.url()) {
         Some(stream_id) => stream_id,
-        None => {
-            not_found(req);
-            return Ok(());
-        }
+        None => return not_found(req),
     };
 
     let content_type = encode::mime_type_from_config(
@@ -25,10 +22,7 @@ fn dispatch_io(req: Request, edicast: &Edicast) -> Result<(), io::Error> {
 
     let stream = match edicast.streams.subscribe_stream(stream_id) {
         Some(stream) => stream,
-        None => {
-            not_found(req);
-            return Ok(());
-        }
+        None => return not_found(req),
     };
 
     let mut response = req.into_writer();
