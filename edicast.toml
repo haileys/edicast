@@ -1,0 +1,16 @@
+[listen]
+public = "127.0.0.1:3000"
+control = "127.0.0.1:3001"
+
+[source.main]
+offline = "silence"
+
+[stream.live]
+path = "/live.mp3"
+source = "main"
+codec = { mp3 = { bitrate = 320, quality = 0 } }
+
+[stream.low]
+path = "/low.mp3"
+source = "main"
+codec = { mp3 = { bitrate = 128, quality = 2 } }

@@ -1,0 +1,84 @@
+use std::sync::{Arc, RwLock};
+use std::sync::mpsc::{self, RecvError};
+
+const BUFFER_SIZE: usize = 1;
+
+struct LiveChannel<T> {
+    txs: RwLock<Option<Vec<mpsc::SyncSender<T>>>>,
+}
+
+pub struct LivePublisher<T> {
+    chan: Arc<LiveChannel<T>>,
+}
+
+pub struct LiveSubscriber<T> {
+    chan: Arc<LiveChannel<T>>,
+}
+
+pub fn live_channel<T>() -> (LivePublisher<T>, LiveSubscriber<T>) {
+    let chan = Arc::new(LiveChannel {
+        txs: RwLock::new(Some(Vec::new())),
+    });
+
+    let publisher = LivePublisher { chan: Arc::clone(&chan) };
+    let subscriber = LiveSubscriber { chan: Arc::clone(&chan) };
+
+    (publisher, subscriber)
+}
+
+pub struct LiveSubscription<T> {
+    rx: mpsc::Receiver<T>,
+}
+
+impl<T> LivePublisher<T> where T: Clone {
+    pub fn publish(&self, data: T) {
+        let mut dead_txs = Vec::new();
+
+        let mut txs_lock = self.chan.txs.write()
+            .expect("writer lock on txs");
+
+        let txs = txs_lock.as_mut()
+            .expect("txs should always be Some while LivePublisher alive");
+
+        for (index, tx) in txs.iter().enumerate() {
+            if let Err(_) = tx.try_send(data.clone()) {
+                dead_txs.push(index);
+            }
+        }
+
+        for dead_tx_index in dead_txs {
+            txs.swap_remove(dead_tx_index);
+        }
+    }
+}
+
+impl<T> Drop for LivePublisher<T> {
+    fn drop(&mut self) {
+        *self.chan.txs.write().expect("writer lock on txs") = None;
+    }
+}
+
+pub enum SubscribeError {
+    NoPublisher,
+}
+
+impl<T> LiveSubscriber<T> where T: Clone {
+    pub fn subscribe(&self) -> Result<LiveSubscription<T>, SubscribeError> {
+        let (tx, rx) = mpsc::sync_channel(BUFFER_SIZE);
+
+        self.chan.txs.write()
+            .expect("writer lock on txs")
+            .as_mut()
+            .map(|txs| {
+                txs.push(tx);
+                LiveSubscription { rx }
+            })
+            .ok_or(SubscribeError::NoPublisher)
+    }
+}
+
+impl<T> LiveSubscription<T> where T: Clone {
+    pub fn recv(&self) -> Result<T, SubscribeError> {
+        self.rx.recv().map_err(|RecvError| SubscribeError::NoPublisher)
+    }
+}

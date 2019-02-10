@@ -5,3 +5,10 @@ authors = ["Hailey Somerville <hailey@hailey.lol>"]
 edition = "2018"
 
 [dependencies]
+crossbeam = "0.7"
+lame = "0.1"
+minimp3 = "0.3"
+serde = "1.0"
+serde_derive = "1.0"
+tiny_http = { git = "https://github.com/haileysome/tiny-http" }
+toml = "0.4"
