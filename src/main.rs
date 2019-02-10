@@ -14,6 +14,7 @@ mod fanout;
 mod server;
 mod source;
 mod stream;
+mod sync;
 
 use std::env;
 use std::path::PathBuf;

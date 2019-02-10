@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::sync::mpsc::{sync_channel, SyncSender, Receiver, RecvError, RecvTimeoutError};
 use std::sync::Arc;
 use std::time::{Instant, Duration};
 use std::thread;
@@ -8,58 +7,79 @@ use crate::audio::PcmData;
 use crate::audio::decode::{PcmRead, PcmReadError};
 use crate::config::{OfflineBehaviour, SourceConfig};
 use crate::fanout::{live_channel, LivePublisher, LiveSubscriber, LiveSubscription};
+use crate::sync::{rendezvous, RendezvousReceiver, RendezvousSender, RecvError, RecvTimeoutError, SendError};
 
-enum SourceThreadCommand {
-    NewSource(Box<PcmRead + Send>),
+struct NewSource(Box<PcmRead + Send>);
+
+pub enum ConnectSourceError {
+    AlreadyConnected,
+    NoSuchSource,
 }
 
 pub struct SourceSet {
     config: HashMap<String, SourceConfig>,
-    source_threads: HashMap<String, SyncSender<SourceThreadCommand>>,
-    source_outputs: HashMap<String, LiveSubscriber<Arc<PcmData>>>,
+    sources: HashMap<String, Source>
 }
 
 impl SourceSet {
     pub fn from_config(config: HashMap<String, SourceConfig>) -> Self {
-        let mut source_outputs = HashMap::new();
-        let mut source_threads = HashMap::new();
+        let mut sources = HashMap::new();
 
         for (name, config) in config.iter() {
-            let (cmd_tx, cmd_rx) = sync_channel(0);
+            let (cmd_send, cmd_recv) = rendezvous();
             let (publisher, subscriber) = live_channel();
 
-            let source = Source {
-                command: cmd_rx,
+            let thread_context = SourceThreadContext {
+                command: cmd_recv,
                 config: config.clone(),
                 output: publisher,
             };
 
-            thread::spawn(move || source_thread_main(source));
+            let source = Source {
+                command: cmd_send,
+                output: subscriber,
+            };
 
-            source_threads.insert(name.to_string(), cmd_tx);
-            source_outputs.insert(name.to_string(), subscriber);
+            thread::spawn(move || source_thread_main(thread_context));
+
+            sources.insert(name.to_string(), source);
         }
 
         SourceSet {
             config,
-            source_threads,
-            source_outputs,
+            sources,
+        }
+    }
+
+    pub fn connect_source(&self, name: &str, io: Box<PcmRead + Send>) -> Result<(), ConnectSourceError> {
+        let source = self.sources.get(name)
+            .ok_or(ConnectSourceError::NoSuchSource)?;
+
+        match source.command.send(NewSource(io)) {
+            Ok(()) => Ok(()),
+            Err(SendError::Busy) => Err(ConnectSourceError::AlreadyConnected),
+            Err(SendError::Disconnected) => panic!("source thread died! wtf! we should restart it!"),
         }
     }
 
     pub fn source_stream(&self, name: &str) -> Option<LiveSubscription<Arc<PcmData>>> {
-        self.source_outputs.get(name)
-            .and_then(|subscriber| subscriber.subscribe().ok())
+        self.sources.get(name)
+            .and_then(|source| source.output.subscribe().ok())
     }
 }
 
 struct Source {
-    command: Receiver<SourceThreadCommand>,
+    command: RendezvousSender<NewSource>,
+    output: LiveSubscriber<Arc<PcmData>>,
+}
+
+struct SourceThreadContext {
+    command: RendezvousReceiver<NewSource>,
     config: SourceConfig,
     output: LivePublisher<Arc<PcmData>>,
 }
 
-fn source_thread_main(source: Source) {
+fn source_thread_main(source: SourceThreadContext) {
     match source.config.offline {
         OfflineBehaviour::Silence => {
             let silence_duration = Duration::from_millis(100);
@@ -71,23 +91,17 @@ fn source_thread_main(source: Source) {
 
             loop {
                 let epoch = Instant::now();
-                let duration = silence_duration;
+                let mut duration = Duration::from_secs(0);
 
                 'silence_timer: loop {
-                    let now = Instant::now();
+                    duration += silence_duration;
 
-                    let deadline = epoch + duration;
-
-                    let timeout = if deadline > now {
-                        deadline - now
-                    } else {
-                        Duration::from_secs(0)
-                    };
-
-                    match source.command.recv_timeout(timeout) {
-                        Ok(SourceThreadCommand::NewSource(mut io)) => {
-                            run_source(&source, &mut *io);
-                            break 'silence_timer;
+                    match source.command.recv_deadline(epoch + duration) {
+                        Ok(mut cmd) => match *cmd {
+                            NewSource(ref mut io) => {
+                                run_source(&source, &mut **io);
+                                break 'silence_timer;
+                            }
                         }
                         Err(RecvTimeoutError::Timeout) => {
                             source.output.publish(Arc::clone(&silence));
@@ -103,10 +117,10 @@ fn source_thread_main(source: Source) {
         OfflineBehaviour::Inactive => {
             loop {
                 match source.command.recv() {
-                    Ok(SourceThreadCommand::NewSource(mut io)) => {
-                        run_source(&source, &mut *io)
+                    Ok(mut cmd) => match *cmd {
+                        NewSource(ref mut io) => run_source(&source, &mut **io),
                     }
-                    Err(RecvError) => {
+                    Err(RecvError::Disconnected) => {
                         // sender end disconnected, exit thread
                         break;
                     }
@@ -116,7 +130,7 @@ fn source_thread_main(source: Source) {
     }
 }
 
-fn run_source(source: &Source, io: &mut PcmRead) {
+fn run_source(source: &SourceThreadContext, io: &mut PcmRead) {
     loop {
         match io.read() {
             Ok(pcm) => source.output.publish(Arc::new(pcm)),
