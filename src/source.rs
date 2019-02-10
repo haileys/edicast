@@ -4,7 +4,8 @@ use std::sync::Arc;
 use std::time::{Instant, Duration};
 use std::thread;
 
-use crate::audio::{PcmData, PcmRead, PcmReadError};
+use crate::audio::PcmData;
+use crate::audio::decode::{PcmRead, PcmReadError};
 use crate::config::{OfflineBehaviour, SourceConfig};
 use crate::fanout::{live_channel, LivePublisher, LiveSubscriber, LiveSubscription};
 
