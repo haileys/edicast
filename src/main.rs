@@ -23,12 +23,6 @@ use std::process;
 
 use config::Config;
 
-#[derive(Debug)]
-enum StartError {
-    Config(config::Error),
-    Server(server::StartError),
-}
-
 fn config_path() -> PathBuf {
     match env::args_os().nth(1) {
         Some(path) => path.into(),
@@ -50,7 +44,5 @@ fn main() {
         }
     };
 
-    server::run(config)
-        .map_err(StartError::Server)
-        .expect("server::run");
+    server::run(config).expect("server::run");
 }

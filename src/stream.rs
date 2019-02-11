@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::mpsc::{sync_channel, SyncSender, Receiver};
 use std::thread;
 
 use crate::audio::PcmData;
@@ -9,21 +8,15 @@ use crate::config::StreamConfig;
 use crate::fanout::{live_channel, LiveSubscriber, LiveSubscription, LivePublisher, SubscribeError};
 use crate::source::SourceSet;
 
-enum StreamThreadCommand {}
-
 pub struct StreamSet {
-    config: HashMap<String, StreamConfig>,
     stream_outputs: HashMap<String, LiveSubscriber<Arc<[u8]>>>,
-    stream_threads: HashMap<String, SyncSender<StreamThreadCommand>>,
 }
 
 impl StreamSet {
-    pub fn from_config(config: HashMap<String, StreamConfig>, source_set: &SourceSet) -> Self {
+    pub fn from_config(config: &HashMap<String, StreamConfig>, source_set: &SourceSet) -> Self {
         let mut stream_outputs = HashMap::new();
-        let mut stream_threads = HashMap::new();
 
         for (name, config) in config.iter() {
-            let (cmd_tx, cmd_rx) = sync_channel(0);
             let (publisher, subscriber) = live_channel();
 
             let input = match source_set.source_stream(&config.source) {
@@ -39,7 +32,6 @@ impl StreamSet {
             };
 
             let source = Stream {
-                command: cmd_rx,
                 config: config.clone(),
                 input: input,
                 output: publisher,
@@ -47,15 +39,10 @@ impl StreamSet {
 
             thread::spawn(move || stream_thread_main(source));
 
-            stream_threads.insert(name.to_string(), cmd_tx);
             stream_outputs.insert(name.to_string(), subscriber);
         }
 
-        StreamSet {
-            config,
-            stream_outputs,
-            stream_threads,
-        }
+        StreamSet { stream_outputs }
     }
 
     pub fn subscribe_stream(&self, name: &str) -> Option<LiveSubscription<Arc<[u8]>>> {
@@ -65,7 +52,6 @@ impl StreamSet {
 }
 
 pub struct Stream {
-    command: Receiver<StreamThreadCommand>,
     config: StreamConfig,
     input: LiveSubscription<Arc<PcmData>>,
     output: LivePublisher<Arc<[u8]>>,

@@ -16,12 +16,11 @@ pub enum ConnectSourceError {
 }
 
 pub struct SourceSet {
-    config: HashMap<String, SourceConfig>,
     sources: HashMap<String, Source>
 }
 
 impl SourceSet {
-    pub fn from_config(config: HashMap<String, SourceConfig>) -> Self {
+    pub fn from_config(config: &HashMap<String, SourceConfig>) -> Self {
         let mut sources = HashMap::new();
 
         for (name, config) in config.iter() {
@@ -44,10 +43,7 @@ impl SourceSet {
             sources.insert(name.to_string(), source);
         }
 
-        SourceSet {
-            config,
-            sources,
-        }
+        SourceSet { sources }
     }
 
     // This method does not start the source stream directly, but instead

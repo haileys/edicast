@@ -9,10 +9,6 @@ mod common;
 mod control;
 mod public;
 
-// fn start_http_interfaces(config: &Config) -> Receiver<HttpAction> {
-//     let (tx, rx) = sync_sender(0);
-// }
-
 pub struct Edicast {
     pub config: Config,
     pub sources: SourceSet,
@@ -22,9 +18,9 @@ pub struct Edicast {
 
 impl Edicast {
     pub fn from_config(config: Config) -> Self {
-        let sources = SourceSet::from_config(config.source.clone());
+        let sources = SourceSet::from_config(&config.source);
 
-        let streams = StreamSet::from_config(config.stream.clone(), &sources);
+        let streams = StreamSet::from_config(&config.stream, &sources);
 
         let public_routes = config.stream.iter().map(|(name, config)| {
             (config.path.to_string(), name.to_string())
