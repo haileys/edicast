@@ -76,8 +76,6 @@ pub fn run(config: Config) -> Result<(), StartError> {
                         control::dispatch(req, edicast_ref)));
             }
         });
-
-        // for source in config.
     }).expect("scoped thread panicked");
 
     Ok(())
