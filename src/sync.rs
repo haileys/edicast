@@ -4,11 +4,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, sync_channel, SyncSender, Receiver};
 use std::time::Instant;
 
+#[derive(Debug)]
 pub struct RendezvousSender<T> {
     ready: Arc<AtomicBool>,
     send: SyncSender<T>,
 }
 
+#[derive(Debug)]
 pub struct RendezvousReceiver<T> {
     ready: Arc<AtomicBool>,
     recv: Receiver<T>,
@@ -72,7 +74,7 @@ impl<T> RendezvousReceiver<T> {
     pub fn recv_deadline<'a>(&'a self, deadline: Instant) -> Result<RendezvousHandle<'a, T>, RecvTimeoutError> {
         let now = Instant::now();
 
-        if now <= deadline {
+        if now >= deadline {
             return Err(RecvTimeoutError::Timeout);
         }
 
