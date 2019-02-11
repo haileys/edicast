@@ -144,7 +144,7 @@ fn source_thread_main(source: SourceThreadContext) {
                     }
                     Err(RecvError::Disconnected) => {
                         // sender end disconnected, exit thread
-                        break;
+                        return;
                     }
                 }
             }
