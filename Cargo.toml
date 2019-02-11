@@ -4,6 +4,12 @@ version = "0.1.0"
 authors = ["Hailey Somerville <hailey@hailey.lol>"]
 edition = "2018"
 
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+
 [dependencies]
 crossbeam = "0.7"
 lame = "0.1"
