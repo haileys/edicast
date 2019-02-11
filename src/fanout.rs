@@ -1,5 +1,5 @@
 use std::sync::{Arc, RwLock};
-use std::sync::mpsc::{self, RecvError};
+use std::sync::mpsc::{self, RecvError, TrySendError};
 
 const BUFFER_SIZE: usize = 1;
 
@@ -41,8 +41,15 @@ impl<T> LivePublisher<T> where T: Clone {
             .expect("txs should always be Some while LivePublisher alive");
 
         for (index, tx) in txs.iter().enumerate() {
-            if let Err(_) = tx.try_send(data.clone()) {
-                dead_txs.push(index);
+            match tx.try_send(data.clone()) {
+                Ok(()) => {}
+                Err(TrySendError::Full(_)) => {
+                    // receiver is not keeping up with the data, back off for
+                    // now and drop this packet
+                }
+                Err(TrySendError::Disconnected(_)) => {
+                    dead_txs.push(index);
+                }
             }
         }
 
