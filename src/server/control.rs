@@ -17,6 +17,7 @@ fn get_header<'a>(req: &'a Request, header_name: &'static str) -> Option<&'a str
 
 enum MediaType {
     Mp3,
+    Ogg,
 }
 
 pub fn dispatch(req: Request, edicast: &Edicast) -> Result<(), io::Error> {
@@ -45,6 +46,7 @@ pub fn dispatch(req: Request, edicast: &Edicast) -> Result<(), io::Error> {
         // verify content type is legit before proceeding
         let media_type = match content_type {
             Some("audio/mpeg") | Some("audio/mp3") => MediaType::Mp3,
+            Some("audio/ogg") | Some("application/ogg") => MediaType::Ogg,
             _ => return common::unsupported_media_type(req),
         };
 
@@ -59,6 +61,16 @@ pub fn dispatch(req: Request, edicast: &Edicast) -> Result<(), io::Error> {
         let pcm_read = match media_type {
             MediaType::Mp3 =>
                 Box::new(decode::Mp3::new(io)) as Box<PcmRead + Send>,
+            MediaType::Ogg => {
+                match decode::Ogg::new(io) {
+                    Ok(ogg) => Box::new(ogg) as Box<PcmRead + Send>,
+                    Err(_) => {
+                        // there was some issue reading the start of the stream
+                        // just kick the client and abort the connect_source
+                        return Ok(());
+                    }
+                }
+            }
         };
 
         match source.start(pcm_read) {
