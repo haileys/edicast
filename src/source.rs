@@ -159,9 +159,25 @@ fn incoming_source(source: &SourceThreadContext, new_source: &NewSource) -> Resu
 }
 
 fn run_source(source: &SourceThreadContext, io: &mut PcmRead) {
+    let mut buffer = Vec::with_capacity(source.config.buffer_samples);
+
     loop {
         match io.read() {
-            Ok(pcm) => source.output.publish(Arc::new(pcm)),
+            Ok(pcm) => {
+                buffer.extend(pcm.samples.into_iter());
+
+                while buffer.len() > source.config.buffer_samples {
+                    let chonk = buffer.drain(0..source.config.buffer_samples)
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice();
+
+                    source.output.publish(Arc::new(PcmData {
+                        channels: pcm.channels,
+                        sample_rate: pcm.sample_rate,
+                        samples: chonk,
+                    }));
+                }
+            }
             Err(PcmReadError::Eof) => return,
             Err(e) => {
                 eprintln!("Error reading from source in run_source: {:?}", e);

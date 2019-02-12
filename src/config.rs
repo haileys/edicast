@@ -57,9 +57,18 @@ impl Default for OfflineBehaviour {
     }
 }
 
+fn default_buffer_samples() -> usize {
+    // 0.5 sec @ 44.1hz is a rough good-enough buffer size
+    // users with lower latency or exotic sample rate needs can tweak this in
+    // config
+    22050
+}
+
 #[derive(Deserialize, Debug, Clone)]
 pub struct SourceConfig {
     pub offline: OfflineBehaviour,
+    #[serde(default = "default_buffer_samples")]
+    pub buffer_samples: usize,
 }
 
 #[derive(Deserialize, Debug, Clone)]
