@@ -4,6 +4,8 @@ use std::sync::mpsc::{sync_channel, SyncSender, Receiver};
 use std::time::{Instant, Duration};
 use std::thread;
 
+use num_rational::Ratio;
+
 use crate::audio::PcmData;
 use crate::audio::decode::{PcmRead, PcmReadError};
 use crate::config::{OfflineBehaviour, SourceConfig};
@@ -158,10 +160,24 @@ fn incoming_source(source: &SourceThreadContext, new_source: &NewSource) -> Resu
     }
 }
 
+fn sleep_until(deadline: Instant) {
+    let now = Instant::now();
+
+    if deadline > now {
+        thread::sleep(deadline - now);
+    }
+}
+
 fn run_source(source: &SourceThreadContext, io: &mut PcmRead) {
+    let epoch = Instant::now();
+    let mut elapsed = Ratio::new(0u64, 1u64);
+
     let mut buffer = Vec::with_capacity(source.config.buffer_samples);
 
     loop {
+        let elapsed_nanos = (elapsed * Ratio::new(1_000_000_000, 1)).to_integer();
+        sleep_until(epoch + Duration::from_nanos(elapsed_nanos));
+
         match io.read() {
             Ok(pcm) => {
                 buffer.extend(pcm.samples.into_iter());
@@ -177,6 +193,10 @@ fn run_source(source: &SourceThreadContext, io: &mut PcmRead) {
                         samples: chonk,
                     }));
                 }
+
+                elapsed += Ratio::<u64>::new(
+                    (pcm.samples.len() / pcm.channels) as u64,
+                    pcm.sample_rate as u64);
             }
             Err(PcmReadError::Eof) => return,
             Err(e) => {

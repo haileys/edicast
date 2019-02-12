@@ -5,6 +5,7 @@ extern crate crossbeam;
 extern crate lame;
 extern crate lewton;
 extern crate minimp3;
+extern crate num_rational;
 extern crate ogg;
 extern crate percent_encoding;
 extern crate serde;
