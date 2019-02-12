@@ -104,7 +104,7 @@ struct SourceThreadContext {
 fn source_thread_main(source: SourceThreadContext) {
     match source.config.offline {
         OfflineBehaviour::Silence => {
-            let silence_duration = Duration::from_millis(100);
+            let silence_duration = Duration::from_millis(source.config.buffer_ms as u64);
             let silence = Arc::new(PcmData {
                 sample_rate: 44100,
                 channels: 2,
@@ -172,7 +172,7 @@ fn run_source(source: &SourceThreadContext, io: &mut PcmRead) {
     let epoch = Instant::now();
     let mut elapsed = Ratio::new(0u64, 1u64);
 
-    let mut buffer = Vec::with_capacity(source.config.buffer_samples);
+    let mut buffer = Vec::new();
 
     loop {
         let elapsed_nanos = (elapsed * Ratio::new(1_000_000_000, 1)).to_integer();
@@ -182,8 +182,10 @@ fn run_source(source: &SourceThreadContext, io: &mut PcmRead) {
             Ok(pcm) => {
                 buffer.extend(pcm.samples.into_iter());
 
-                while buffer.len() > source.config.buffer_samples {
-                    let chonk = buffer.drain(0..source.config.buffer_samples)
+                let buffer_samples = source.config.buffer_ms * pcm.sample_rate / 1000;
+
+                while buffer.len() > buffer_samples {
+                    let chonk = buffer.drain(0..buffer_samples)
                         .collect::<Vec<_>>()
                         .into_boxed_slice();
 
@@ -199,6 +201,9 @@ fn run_source(source: &SourceThreadContext, io: &mut PcmRead) {
                     pcm.sample_rate as u64);
             }
             Err(PcmReadError::Eof) => return,
+            Err(PcmReadError::SkippedData) => {
+                // just ignore and read again, may be metadata
+            }
             Err(e) => {
                 eprintln!("Error reading from source in run_source: {:?}", e);
                 break;
