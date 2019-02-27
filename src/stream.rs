@@ -2,15 +2,16 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::thread;
 
+use crossbeam_channel::{Receiver, RecvError};
 use slog::Logger;
 
 use crate::audio::PcmData;
 use crate::audio::encode;
 use crate::config::StreamConfig;
-use crate::fanout::{live_channel, LiveSubscriber, LiveSubscription, LivePublisher, SubscribeError};
+use crate::fanout::{live_channel, LivePublisher, LiveSubscriber};
 use crate::source::SourceSet;
 
-pub type StreamSubscription = LiveSubscription<Arc<[u8]>>;
+pub type StreamSubscription = Receiver<Arc<[u8]>>;
 
 pub struct StreamSet {
     stream_outputs: HashMap<String, LiveSubscriber<Arc<[u8]>>>,
@@ -59,7 +60,7 @@ impl StreamSet {
 
 pub struct StreamThreadContext {
     config: StreamConfig,
-    input: LiveSubscription<Arc<PcmData>>,
+    input: Receiver<Arc<PcmData>>,
     log: Logger,
     name: String,
     output: LivePublisher<Arc<[u8]>>,
@@ -81,7 +82,7 @@ fn stream_thread_main(stream: StreamThreadContext) {
                 let encoded = codec.encode(&pcm);
                 stream.output.publish(encoded.into());
             }
-            Err(SubscribeError::NoPublisher) => {
+            Err(RecvError) => {
                 panic!("source stream terminated unexpectedly!");
             }
         }

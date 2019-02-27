@@ -11,7 +11,7 @@ use slog::Logger;
 use crate::audio::PcmData;
 use crate::audio::decode::{PcmRead, PcmReadError};
 use crate::config::{OfflineBehaviour, SourceConfig};
-use crate::fanout::{live_channel, LivePublisher, LiveSubscriber, LiveSubscription};
+use crate::fanout::{live_channel, LivePublisher, LiveSubscriber};
 use crate::sync::{rendezvous, RendezvousReceiver, RendezvousSender, RecvError, RecvTimeoutError, SendError};
 
 pub enum ConnectSourceError {
@@ -76,7 +76,7 @@ impl SourceSet {
         }
     }
 
-    pub fn source_stream(&self, name: &str) -> Option<LiveSubscription<Arc<PcmData>>> {
+    pub fn source_stream(&self, name: &str) -> Option<Receiver<Arc<PcmData>>> {
         self.sources.get(name)
             .and_then(|source| source.output.subscribe().ok())
     }

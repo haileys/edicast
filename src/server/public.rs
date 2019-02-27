@@ -7,7 +7,6 @@ use uuid::Uuid;
 use super::common;
 use super::Edicast;
 use crate::audio::encode;
-use crate::fanout::SubscribeError;
 
 pub fn dispatch(req: Request, log: Logger, edicast: &Edicast) {
     let request_id = Uuid::new_v4();
@@ -69,7 +68,7 @@ fn run_listener(req: Request, log: Logger, edicast: &Edicast) -> Result<RunResul
             Ok(data) => {
                 response.write_all(&data)?;
             }
-            Err(SubscribeError::NoPublisher) => {
+            Err(_) => {
                 // publisher went away, terminate stream
                 return Ok(RunResult::StreamEnd);
             }

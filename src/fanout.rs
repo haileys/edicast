@@ -1,6 +1,6 @@
 use std::sync::{Arc, RwLock};
 
-use crossbeam_channel::{Receiver, RecvError, Sender, TrySendError};
+use crossbeam_channel::{Receiver, Sender, TrySendError};
 
 const BUFFER_SIZE: usize = 1;
 
@@ -25,10 +25,6 @@ pub fn live_channel<T>() -> (LivePublisher<T>, LiveSubscriber<T>) {
     let subscriber = LiveSubscriber { chan: Arc::clone(&chan) };
 
     (publisher, subscriber)
-}
-
-pub struct LiveSubscription<T> {
-    rx: Receiver<T>,
 }
 
 impl<T> LivePublisher<T> where T: Clone {
@@ -71,22 +67,15 @@ pub enum SubscribeError {
 }
 
 impl<T> LiveSubscriber<T> where T: Clone {
-    pub fn subscribe(&self) -> Result<LiveSubscription<T>, SubscribeError> {
+    pub fn subscribe(&self) -> Result<Receiver<T>, SubscribeError> {
         let (tx, rx) = crossbeam_channel::bounded(BUFFER_SIZE);
 
         self.chan.txs.write()
             .expect("writer lock on txs")
             .as_mut()
-            .map(|txs| {
-                txs.push(tx);
-                LiveSubscription { rx }
-            })
-            .ok_or(SubscribeError::NoPublisher)
-    }
-}
+            .ok_or(SubscribeError::NoPublisher)?
+            .push(tx);
 
-impl<T> LiveSubscription<T> where T: Clone {
-    pub fn recv(&self) -> Result<T, SubscribeError> {
-        self.rx.recv().map_err(|RecvError| SubscribeError::NoPublisher)
+        Ok(rx)
     }
 }
