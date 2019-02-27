@@ -1,17 +1,3 @@
-#[macro_use]
-extern crate serde_derive;
-
-extern crate crossbeam;
-extern crate lame;
-extern crate lewton;
-extern crate minimp3;
-extern crate num_rational;
-extern crate ogg;
-extern crate percent_encoding;
-extern crate serde;
-extern crate tiny_http;
-extern crate toml;
-
 mod audio;
 mod config;
 mod fanout;
