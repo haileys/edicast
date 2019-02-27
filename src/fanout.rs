@@ -1,10 +1,11 @@
 use std::sync::{Arc, RwLock};
-use std::sync::mpsc::{self, RecvError, TrySendError};
+
+use crossbeam_channel::{Receiver, RecvError, Sender, TrySendError};
 
 const BUFFER_SIZE: usize = 1;
 
 struct LiveChannel<T> {
-    txs: RwLock<Option<Vec<mpsc::SyncSender<T>>>>,
+    txs: RwLock<Option<Vec<Sender<T>>>>,
 }
 
 pub struct LivePublisher<T> {
@@ -27,7 +28,7 @@ pub fn live_channel<T>() -> (LivePublisher<T>, LiveSubscriber<T>) {
 }
 
 pub struct LiveSubscription<T> {
-    rx: mpsc::Receiver<T>,
+    rx: Receiver<T>,
 }
 
 impl<T> LivePublisher<T> where T: Clone {
@@ -71,7 +72,7 @@ pub enum SubscribeError {
 
 impl<T> LiveSubscriber<T> where T: Clone {
     pub fn subscribe(&self) -> Result<LiveSubscription<T>, SubscribeError> {
-        let (tx, rx) = mpsc::sync_channel(BUFFER_SIZE);
+        let (tx, rx) = crossbeam_channel::bounded(BUFFER_SIZE);
 
         self.chan.txs.write()
             .expect("writer lock on txs")
