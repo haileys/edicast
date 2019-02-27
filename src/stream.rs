@@ -2,18 +2,22 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::thread;
 
+use slog::Logger;
+
 use crate::audio::PcmData;
 use crate::audio::encode;
 use crate::config::StreamConfig;
 use crate::fanout::{live_channel, LiveSubscriber, LiveSubscription, LivePublisher, SubscribeError};
 use crate::source::SourceSet;
 
+pub type StreamSubscription = LiveSubscription<Arc<[u8]>>;
+
 pub struct StreamSet {
     stream_outputs: HashMap<String, LiveSubscriber<Arc<[u8]>>>,
 }
 
 impl StreamSet {
-    pub fn from_config(config: &HashMap<String, StreamConfig>, source_set: &SourceSet) -> Self {
+    pub fn new(log: Logger, config: &HashMap<String, StreamConfig>, source_set: &SourceSet) -> Self {
         let mut stream_outputs = HashMap::new();
 
         for (name, config) in config.iter() {
@@ -31,9 +35,11 @@ impl StreamSet {
                 }
             };
 
-            let source = Stream {
+            let source = StreamThreadContext {
                 config: config.clone(),
                 input: input,
+                log: log.clone(),
+                name: name.clone(),
                 output: publisher,
             };
 
@@ -45,20 +51,29 @@ impl StreamSet {
         StreamSet { stream_outputs }
     }
 
-    pub fn subscribe_stream(&self, name: &str) -> Option<LiveSubscription<Arc<[u8]>>> {
+    pub fn subscribe_stream(&self, name: &str) -> Option<StreamSubscription> {
         self.stream_outputs.get(name)
             .and_then(|subscriber| subscriber.subscribe().ok())
     }
 }
 
-pub struct Stream {
+pub struct StreamThreadContext {
     config: StreamConfig,
     input: LiveSubscription<Arc<PcmData>>,
+    log: Logger,
+    name: String,
     output: LivePublisher<Arc<[u8]>>,
 }
 
-fn stream_thread_main(stream: Stream) {
+fn stream_thread_main(stream: StreamThreadContext) {
     let mut codec = encode::from_config(&stream.config.codec);
+
+    slog::info!(stream.log, "Starting stream";
+        "codec" => codec.describe(),
+        "path" => stream.config.path,
+        "source" => stream.config.source,
+        "stream" => stream.name,
+    );
 
     loop {
         match stream.input.recv() {

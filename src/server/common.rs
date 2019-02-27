@@ -1,6 +1,16 @@
 use std::io;
 
+use slog::OwnedKVList;
 use tiny_http::{Request, Response};
+
+pub fn request_log_keys(request: &Request) -> OwnedKVList {
+    (slog::o!{
+        "method" => request.method().to_string(),
+        "url" => request.url().to_string(),
+        "http_version" => request.http_version().to_string(),
+        "remote_addr" => request.remote_addr().to_string(),
+    }).into()
+}
 
 pub fn not_found(req: Request) -> Result<(), io::Error> {
     req.respond(Response::from_string("Not found")

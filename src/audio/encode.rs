@@ -4,6 +4,7 @@ use crate::audio::PcmData;
 use crate::config::{self, CodecConfig};
 
 pub trait Codec {
+    fn describe(&self) -> String;
     fn encode(&mut self, data: &PcmData) -> Box<[u8]>;
 }
 
@@ -34,6 +35,12 @@ impl Mp3 {
 }
 
 impl Codec for Mp3 {
+    fn describe(&self) -> String {
+        format!("MP3 (libmp3lame, V{}, {} kbps)",
+            self.lame.quality(),
+            self.lame.kilobitrate())
+    }
+
     fn encode(&mut self, data: &PcmData) -> Box<[u8]> {
         // we must deinterleave audio data for LAME and discard channels beyond
         // stereo. LAME does have an interleaved encode function, but it still

@@ -1,10 +1,12 @@
 use std::collections::HashMap;
+use std::io;
 use std::sync::Arc;
 use std::sync::mpsc::{sync_channel, SyncSender, Receiver};
-use std::time::{Instant, Duration};
 use std::thread;
+use std::time::{Instant, Duration};
 
 use num_rational::Ratio;
+use slog::Logger;
 
 use crate::audio::PcmData;
 use crate::audio::decode::{PcmRead, PcmReadError};
@@ -22,7 +24,7 @@ pub struct SourceSet {
 }
 
 impl SourceSet {
-    pub fn from_config(config: &HashMap<String, SourceConfig>) -> Self {
+    pub fn new(log: Logger, config: &HashMap<String, SourceConfig>) -> Self {
         let mut sources = HashMap::new();
 
         for (name, config) in config.iter() {
@@ -30,8 +32,10 @@ impl SourceSet {
             let (publisher, subscriber) = live_channel();
 
             let thread_context = SourceThreadContext {
+                name: name.clone(),
                 command: cmd_recv,
                 config: config.clone(),
+                log: log.clone(),
                 output: publisher,
             };
 
@@ -54,13 +58,13 @@ impl SourceSet {
     // to reserve the source slot before the caller has a PcmRead available
     // and allows the HTTP server to respond with the right headers in the case
     // that a source stream could not begin without upgrading the connection.
-    pub fn connect_source(&self, name: &str) -> Result<StartSource, ConnectSourceError> {
+    pub fn connect_source(&self, name: &str, log: Logger) -> Result<StartSource, ConnectSourceError> {
         let source = self.sources.get(name)
             .ok_or(ConnectSourceError::NoSuchSource)?;
 
         let (tx, rx) = sync_channel(0);
 
-        match source.command.send(NewSource(rx)) {
+        match source.command.send(NewSource { log, rx }) {
             Ok(()) => {
                 // the source thread is reserved busy for us
                 // return a handle to the connecting source to proceed and
@@ -88,7 +92,10 @@ impl StartSource {
     }
 }
 
-struct NewSource(Receiver<Box<PcmRead + Send>>);
+struct NewSource {
+    log: Logger,
+    rx: Receiver<Box<PcmRead + Send>>
+}
 
 struct Source {
     command: RendezvousSender<NewSource>,
@@ -96,12 +103,16 @@ struct Source {
 }
 
 struct SourceThreadContext {
+    name: String,
     command: RendezvousReceiver<NewSource>,
     config: SourceConfig,
+    log: Logger,
     output: LivePublisher<Arc<PcmData>>,
 }
 
 fn source_thread_main(source: SourceThreadContext) {
+    slog::info!(source.log, "Starting source"; "source" => &source.name);
+
     match source.config.offline {
         OfflineBehaviour::Silence => {
             let silence_duration = Duration::from_millis(source.config.buffer_ms as u64);
@@ -151,9 +162,26 @@ fn source_thread_main(source: SourceThreadContext) {
 }
 
 fn incoming_source(source: &SourceThreadContext, new_source: &NewSource) -> Result<(), ()> {
-    match new_source.0.recv() {
+    match new_source.rx.recv() {
         Ok(mut io) => {
-            run_source(source, &mut *io);
+            let epoch = Instant::now();
+
+            let result = run_source(source, epoch, &mut *io);
+
+            let duration = Instant::now() - epoch;
+
+            match result {
+                Ok(()) => {
+                    slog::info!(new_source.log, "Live source finished"; "duration_sec" => duration.as_secs());
+                }
+                Err(e) => {
+                    slog::error!(new_source.log, "I/O error reading from live source";
+                        "error" => e.to_string(),
+                        "duration_sec" => duration.as_secs(),
+                    );
+                }
+            }
+
             Ok(())
         }
         Err(_) => Err(())
@@ -168,10 +196,10 @@ fn sleep_until(deadline: Instant) {
     }
 }
 
-fn run_source(source: &SourceThreadContext, io: &mut PcmRead) {
-    let epoch = Instant::now();
+fn run_source(source: &SourceThreadContext, epoch: Instant, io: &mut PcmRead)
+    -> Result<(), io::Error>
+{
     let mut elapsed = Ratio::new(0u64, 1u64);
-
     let mut buffer = Vec::new();
 
     loop {
@@ -200,13 +228,14 @@ fn run_source(source: &SourceThreadContext, io: &mut PcmRead) {
                     (pcm.samples.len() / pcm.channels) as u64,
                     pcm.sample_rate as u64);
             }
-            Err(PcmReadError::Eof) => return,
+            Err(PcmReadError::Eof) => {
+                return Ok(());
+            }
             Err(PcmReadError::SkippedData) => {
                 // just ignore and read again, may be metadata
             }
-            Err(e) => {
-                eprintln!("Error reading from source in run_source: {:?}", e);
-                break;
+            Err(PcmReadError::Io(e)) => {
+                return Err(e);
             }
         }
     }

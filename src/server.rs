@@ -1,5 +1,9 @@
 use std::collections::HashMap;
 use std::io;
+use std::net::SocketAddr;
+
+use slog::Logger;
+use tiny_http::NewServerError;
 
 use crate::config::Config;
 use crate::source::SourceSet;
@@ -11,16 +15,16 @@ mod public;
 
 pub struct Edicast {
     pub config: Config,
+    pub public_routes: HashMap<String, String>,
     pub sources: SourceSet,
     pub streams: StreamSet,
-    pub public_routes: HashMap<String, String>,
 }
 
 impl Edicast {
-    pub fn from_config(config: Config) -> Self {
-        let sources = SourceSet::from_config(&config.source);
+    pub fn new(log: Logger, config: Config) -> Self {
+        let sources = SourceSet::new(log.clone(), &config.source);
 
-        let streams = StreamSet::from_config(&config.stream, &sources);
+        let streams = StreamSet::new(log.clone(), &config.stream, &sources);
 
         let public_routes = config.stream.iter().map(|(name, config)| {
             (config.path.to_string(), name.to_string())
@@ -28,52 +32,50 @@ impl Edicast {
 
         Edicast {
             config,
+            public_routes,
             sources,
             streams,
-            public_routes,
         }
     }
 }
 
 #[derive(Debug)]
 pub enum StartError {
-    Bind(tiny_http::NewServerError),
+    Bind(SocketAddr, io::Error),
 }
 
-fn handle_dispatch_error(result: Result<(), io::Error>) {
-    match result {
-        Ok(()) => {}
-        Err(e) => {
-            eprintln!("broken write to http client! {:?}", e);
-        }
-    }
-}
+pub fn run(log: Logger, config: Config) -> Result<(), StartError> {
+    slog::info!(log, "Starting edicast";
+        "public" => config.listen.public,
+        "control" => config.listen.control,
+    );
 
-pub fn run(config: Config) -> Result<(), StartError> {
     let public = tiny_http::Server::http(&config.listen.public)
-        .map_err(StartError::Bind)?;
+        .map_err(|NewServerError::Io(e)|
+            StartError::Bind(config.listen.public, e))?;
 
     let control = tiny_http::Server::http(&config.listen.control)
-        .map_err(StartError::Bind)?;
+        .map_err(|NewServerError::Io(e)|
+            StartError::Bind(config.listen.public, e))?;
 
-    let edicast = Edicast::from_config(config);
+    let edicast = Edicast::new(log.clone(), config);
 
     crossbeam::scope(|scope| {
         scope.spawn(|scope| {
             for req in public.incoming_requests() {
                 let edicast_ref = &edicast;
+                let log = log.clone();
                 scope.spawn(move |_|
-                    handle_dispatch_error(
-                        public::dispatch(req, edicast_ref)));
+                    public::dispatch(req, log, edicast_ref));
             }
         });
 
         scope.spawn(|scope| {
             for req in control.incoming_requests() {
                 let edicast_ref = &edicast;
+                let log = log.clone();
                 scope.spawn(move |_|
-                    handle_dispatch_error(
-                        control::dispatch(req, edicast_ref)));
+                    control::dispatch(req, log, edicast_ref));
             }
         });
     }).expect("scoped thread panicked");
