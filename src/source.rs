@@ -116,11 +116,7 @@ fn source_thread_main(source: SourceThreadContext) {
     match source.config.offline {
         OfflineBehaviour::Silence => {
             let silence_duration = Duration::from_millis(source.config.buffer_ms as u64);
-            let silence = Arc::new(PcmData {
-                sample_rate: 44100,
-                channels: 2,
-                samples: Box::new([0i16; 44100 / 10 * 2]),
-            });
+            let silence = Arc::new(PcmData::silence(silence_duration));
 
             loop {
                 let epoch = Instant::now();
