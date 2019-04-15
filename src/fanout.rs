@@ -50,7 +50,7 @@ impl<T> LivePublisher<T> where T: Clone {
             }
         }
 
-        for dead_tx_index in dead_txs {
+        for dead_tx_index in dead_txs.into_iter().rev() {
             txs.swap_remove(dead_tx_index);
         }
     }
