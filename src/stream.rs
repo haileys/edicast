@@ -44,7 +44,10 @@ impl StreamSet {
                 output: publisher,
             };
 
-            thread::spawn(move || stream_thread_main(source));
+            thread::Builder::new()
+                .name(format!("edicast/stream: {}", name))
+                .spawn(move || stream_thread_main(source))
+                .expect("spawn edicast stream thread");
 
             stream_outputs.insert(name.to_string(), subscriber);
         }

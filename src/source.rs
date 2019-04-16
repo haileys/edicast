@@ -44,7 +44,10 @@ impl SourceSet {
                 output: subscriber,
             };
 
-            thread::spawn(move || source_thread_main(thread_context));
+            thread::Builder::new()
+                .name(format!("edicast/source: {}", name))
+                .spawn(move || source_thread_main(thread_context))
+                .expect("spawn edicast source thread");
 
             sources.insert(name.to_string(), source);
         }

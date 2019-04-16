@@ -61,23 +61,47 @@ pub fn run(log: Logger, config: Config) -> Result<(), StartError> {
     let edicast = Edicast::new(log.clone(), config);
 
     crossbeam::scope(|scope| {
-        scope.spawn(|scope| {
+        scope.builder().name("edicast/listen-public".to_owned()).spawn(|scope| {
             for req in public.incoming_requests() {
-                let edicast_ref = &edicast;
-                let log = log.clone();
-                scope.spawn(move |_|
-                    public::dispatch(req, log, edicast_ref));
-            }
-        });
+                let name = format!("edicast/public: {} {} {:40}", req.remote_addr(), req.method(), req.url());
 
-        scope.spawn(|scope| {
-            for req in control.incoming_requests() {
-                let edicast_ref = &edicast;
-                let log = log.clone();
-                scope.spawn(move |_|
-                    control::dispatch(req, log, edicast_ref));
+                let result = scope.builder()
+                    .name(name.clone())
+                    .spawn({
+                        let edicast = &edicast;
+                        let log = log.clone();
+                        move |_| public::dispatch(req, log, edicast)
+                    });
+
+                if let Err(e) = result {
+                    slog::crit!(log, "Could not thread";
+                        "error" => format!("{:?}", e),
+                        "name" => name,
+                    );
+                }
             }
-        });
+        }).expect("spawn public listen thread");
+
+        scope.builder().name("edicast/listen-control".to_owned()).spawn(|scope| {
+            for req in control.incoming_requests() {
+                let name = format!("edicast/control: {} {} {:40}", req.remote_addr(), req.method(), req.url());
+
+                let result = scope.builder()
+                    .name(name.clone())
+                    .spawn({
+                        let edicast = &edicast;
+                        let log = log.clone();
+                        move |_| control::dispatch(req, log, edicast)
+                    });
+
+                if let Err(e) = result {
+                    slog::crit!(log, "Could not spawn thread";
+                        "error" => format!("{:?}", e),
+                        "name" => name,
+                    );
+                }
+            }
+        }).expect("spawn control listen");
     }).expect("scoped thread panicked");
 
     Ok(())
