@@ -85,15 +85,19 @@ pub fn run(log: Logger, config: Config) -> Result<(), StartError> {
     }
 
     crossbeam::scope(|scope| {
-        let (reqs_tx, reqs_rx) = mpsc::sync_channel(0);
+        let requests = {
+            let (reqs_tx, reqs_rx) = mpsc::sync_channel(0);
 
-        channel_iterate(scope, reqs_tx.clone(),
-            public.incoming_requests().map(IncomingRequest::Public));
+            channel_iterate(scope, reqs_tx.clone(),
+                public.incoming_requests().map(IncomingRequest::Public));
 
-        channel_iterate(scope, reqs_tx.clone(),
-            control.incoming_requests().map(IncomingRequest::Control));
+            channel_iterate(scope, reqs_tx.clone(),
+                control.incoming_requests().map(IncomingRequest::Control));
 
-        for req in reqs_rx {
+            reqs_rx
+        };
+
+        for req in requests {
             let name = match &req {
                 IncomingRequest::Public(req) => {
                     format!("edicast/public: {} {} {:40}", req.remote_addr(), req.method(), req.url())
