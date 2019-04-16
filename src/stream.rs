@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::mpsc::{Receiver, RecvError};
 use std::thread;
 
-use crossbeam_channel::{Receiver, RecvError};
 use slog::Logger;
 
 use crate::audio::PcmData;

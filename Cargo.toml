@@ -12,7 +12,6 @@ panic = "abort"
 
 [dependencies]
 crossbeam = "0.7"
-crossbeam-channel = "0.3"
 lame = "0.1"
 lewton = "0.9"
 minimp3 = "0.3"

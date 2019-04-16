@@ -1,14 +1,13 @@
 use std::ops::{Deref, DerefMut, Drop};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, sync_channel, SyncSender, Receiver};
 use std::time::Instant;
-
-use crossbeam_channel::{Sender, Receiver};
 
 #[derive(Debug)]
 pub struct RendezvousSender<T> {
     ready: Arc<AtomicBool>,
-    send: Sender<T>,
+    send: SyncSender<T>,
 }
 
 #[derive(Debug)]
@@ -33,7 +32,7 @@ pub enum RecvTimeoutError {
 
 pub fn rendezvous<T>() -> (RendezvousSender<T>, RendezvousReceiver<T>) {
     let ready = Arc::new(AtomicBool::new(true));
-    let (send, recv) = crossbeam_channel::bounded(0);
+    let (send, recv) = sync_channel(0);
 
     (RendezvousSender { ready: Arc::clone(&ready), send },
         RendezvousReceiver { ready: Arc::clone(&ready), recv })
@@ -80,12 +79,9 @@ impl<T> RendezvousReceiver<T> {
         }
 
         match self.recv.recv_timeout(deadline - now) {
-            Ok(value) =>
-                Ok(RendezvousHandle { value, recv: self }),
-            Err(crossbeam_channel::RecvTimeoutError::Timeout) =>
-                Err(RecvTimeoutError::Timeout),
-            Err(crossbeam_channel::RecvTimeoutError::Disconnected) =>
-                Err(RecvTimeoutError::Disconnected),
+            Ok(value) => Ok(RendezvousHandle { value, recv: self }),
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(RecvTimeoutError::Timeout),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(RecvTimeoutError::Disconnected),
         }
     }
 }

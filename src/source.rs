@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
+use std::sync::mpsc::{sync_channel, SyncSender, Receiver};
 use std::thread;
 use std::time::{Instant, Duration};
 
-use crossbeam_channel::{Sender, Receiver};
 use num_rational::Ratio;
 use slog::Logger;
 
@@ -62,7 +62,7 @@ impl SourceSet {
         let source = self.sources.get(name)
             .ok_or(ConnectSourceError::NoSuchSource)?;
 
-        let (tx, rx) = crossbeam_channel::bounded(0);
+        let (tx, rx) = sync_channel(0);
 
         match source.command.send(NewSource { log, rx }) {
             Ok(()) => {
@@ -83,7 +83,7 @@ impl SourceSet {
 }
 
 pub struct StartSource {
-    send: Sender<Box<PcmRead + Send>>,
+    send: SyncSender<Box<PcmRead + Send>>,
 }
 
 impl StartSource {
