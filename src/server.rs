@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
+use std::sync::mpsc::{self, SyncSender};
 
+use crossbeam::thread::Scope;
 use slog::Logger;
-use tiny_http::NewServerError;
+use tiny_http::{NewServerError, Request};
 
 use crate::config::Config;
 use crate::source::SourceSet;
@@ -44,6 +46,23 @@ pub enum StartError {
     Bind(SocketAddr, io::Error),
 }
 
+fn channel_iterate<'a, T, Iter>(
+    scope: &Scope<'a>,
+    sender: SyncSender<T>,
+    iter: Iter,
+) where
+    T: Send + 'a,
+    Iter: IntoIterator<Item = T> + Send + 'a
+{
+    scope.spawn(move |_| {
+        for item in iter {
+            if let Err(_) = sender.send(item) {
+                break;
+            }
+        }
+    });
+}
+
 pub fn run(log: Logger, config: Config) -> Result<(), StartError> {
     slog::info!(log, "Starting edicast";
         "public" => config.listen.public,
@@ -60,48 +79,52 @@ pub fn run(log: Logger, config: Config) -> Result<(), StartError> {
 
     let edicast = Edicast::new(log.clone(), config);
 
+    enum IncomingRequest {
+        Public(Request),
+        Control(Request),
+    }
+
     crossbeam::scope(|scope| {
-        scope.builder().name("edicast/listen-public".to_owned()).spawn(|scope| {
-            for req in public.incoming_requests() {
-                let name = format!("edicast/public: {} {} {:40}", req.remote_addr(), req.method(), req.url());
+        let (reqs_tx, reqs_rx) = mpsc::sync_channel(0);
 
-                let result = scope.builder()
-                    .name(name.clone())
-                    .spawn({
-                        let edicast = &edicast;
-                        let log = log.clone();
-                        move |_| public::dispatch(req, log, edicast)
-                    });
+        channel_iterate(scope, reqs_tx.clone(),
+            public.incoming_requests().map(IncomingRequest::Public));
 
-                if let Err(e) = result {
-                    slog::crit!(log, "Could not spawn thread";
-                        "error" => format!("{:?}", e),
-                        "name" => name,
-                    );
+        channel_iterate(scope, reqs_tx.clone(),
+            control.incoming_requests().map(IncomingRequest::Control));
+
+        for req in reqs_rx {
+            let name = match &req {
+                IncomingRequest::Public(req) => {
+                    format!("edicast/public: {} {} {:40}", req.remote_addr(), req.method(), req.url())
                 }
-            }
-        }).expect("spawn public listen thread");
-
-        scope.builder().name("edicast/listen-control".to_owned()).spawn(|scope| {
-            for req in control.incoming_requests() {
-                let name = format!("edicast/control: {} {} {:40}", req.remote_addr(), req.method(), req.url());
-
-                let result = scope.builder()
-                    .name(name.clone())
-                    .spawn({
-                        let edicast = &edicast;
-                        let log = log.clone();
-                        move |_| control::dispatch(req, log, edicast)
-                    });
-
-                if let Err(e) = result {
-                    slog::crit!(log, "Could not spawn thread";
-                        "error" => format!("{:?}", e),
-                        "name" => name,
-                    );
+                IncomingRequest::Control(req) => {
+                    format!("edicast/control: {} {} {:40}", req.remote_addr(), req.method(), req.url())
                 }
+            };
+
+            let result = scope.builder()
+                .name(name.clone())
+                .spawn({
+                    let edicast = &edicast;
+                    let log = log.clone();
+                    move |_| match req {
+                        IncomingRequest::Public(req) => {
+                            public::dispatch(req, log, edicast)
+                        }
+                        IncomingRequest::Control(req) => {
+                            control::dispatch(req, log, edicast)
+                        }
+                    }
+                });
+
+            if let Err(e) = result {
+                slog::crit!(log, "Could not spawn thread";
+                    "error" => format!("{:?}", e),
+                    "name" => name,
+                );
             }
-        }).expect("spawn control listen");
+        }
     }).expect("scoped thread panicked");
 
     Ok(())
