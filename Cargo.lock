@@ -127,7 +127,6 @@ name = "edicast"
 version = "0.1.0"
 dependencies = [
  "crossbeam 0.7.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "crossbeam-channel 0.3.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "lame 0.1.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "lewton 0.9.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "minimp3 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
