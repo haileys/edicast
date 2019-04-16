@@ -74,7 +74,7 @@ pub fn run(log: Logger, config: Config) -> Result<(), StartError> {
                     });
 
                 if let Err(e) = result {
-                    slog::crit!(log, "Could not thread";
+                    slog::crit!(log, "Could not spawn thread";
                         "error" => format!("{:?}", e),
                         "name" => name,
                     );
