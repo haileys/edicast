@@ -23,16 +23,16 @@ enum MediaType {
 }
 
 fn init_decoder(media_type: MediaType, io: impl Read + Send + 'static)
-    -> Result<Box<PcmRead + Send>, String>
+    -> Result<Box<dyn PcmRead + Send>, String>
 {
     use decode::{Mp3, Ogg};
 
     match media_type {
         MediaType::Mp3 =>
-            Ok(Box::new(Mp3::new(io)) as Box<PcmRead + Send>),
+            Ok(Box::new(Mp3::new(io)) as Box<dyn PcmRead + Send>),
         MediaType::Ogg => {
             match Ogg::new(io) {
-                Ok(ogg) => Ok(Box::new(ogg) as Box<PcmRead + Send>),
+                Ok(ogg) => Ok(Box::new(ogg) as Box<dyn PcmRead + Send>),
                 Err(err) => Err(err.to_string()),
             }
         }

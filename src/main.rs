@@ -87,7 +87,7 @@ fn main() {
         }
 
         Ok(())
-    };
+    }
 
     match run() {
         Ok(()) => {}

@@ -86,18 +86,18 @@ impl SourceSet {
 }
 
 pub struct StartSource {
-    send: SyncSender<Box<PcmRead + Send>>,
+    send: SyncSender<Box<dyn PcmRead + Send>>,
 }
 
 impl StartSource {
-    pub fn start(self, io: Box<PcmRead + Send>) -> Result<(), ()> {
+    pub fn start(self, io: Box<dyn PcmRead + Send>) -> Result<(), ()> {
         self.send.send(io).map_err(|_| ())
     }
 }
 
 struct NewSource {
     log: Logger,
-    rx: Receiver<Box<PcmRead + Send>>
+    rx: Receiver<Box<dyn PcmRead + Send>>
 }
 
 struct Source {
@@ -195,7 +195,7 @@ fn sleep_until(deadline: Instant) {
     }
 }
 
-fn run_source(source: &SourceThreadContext, epoch: Instant, io: &mut PcmRead)
+fn run_source(source: &SourceThreadContext, epoch: Instant, io: &mut dyn PcmRead)
     -> Result<(), io::Error>
 {
     let mut elapsed = Ratio::new(0u64, 1u64);

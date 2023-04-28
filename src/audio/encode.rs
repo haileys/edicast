@@ -8,9 +8,9 @@ pub trait Codec {
     fn encode(&mut self, data: &PcmData) -> Box<[u8]>;
 }
 
-pub fn from_config(config: &CodecConfig) -> Box<Codec> {
+pub fn from_config(config: &CodecConfig) -> Box<dyn Codec> {
     match config {
-        CodecConfig::Mp3(mp3) => Box::new(Mp3::new(mp3)) as Box<Codec>,
+        CodecConfig::Mp3(mp3) => Box::new(Mp3::new(mp3)) as Box<dyn Codec>,
     }
 }
 
