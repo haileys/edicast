@@ -1,4 +1,4 @@
-use std::io::Read;
+use std::io::{self, Read};
 use std::str;
 
 use percent_encoding::percent_decode;
@@ -39,6 +39,11 @@ fn init_decoder(media_type: MediaType, io: impl Read + Send + 'static)
     }
 }
 
+enum SourceKind {
+    IcecastLegacy,
+    Icecast24Put,
+}
+
 pub fn dispatch(req: Request, log: Logger, edicast: &Edicast) {
     let request_id = Uuid::new_v4();
     let log = log.new(slog::o!("request_id" => request_id));
@@ -46,10 +51,19 @@ pub fn dispatch(req: Request, log: Logger, edicast: &Edicast) {
     let url = req.url();
 
     if url.starts_with("/source/") {
-        if !method_allowed(req.method()) {
-            let _ = common::method_not_allowed(req);
-            return;
-        }
+        let source_kind = match req.method() {
+            // SOURCE is sent by legacy icecast clients
+            Method::NonStandard(method) if method == "SOURCE" => {
+                SourceKind::IcecastLegacy
+            }
+            Method::Put => {
+                SourceKind::Icecast24Put
+            }
+            _ => {
+                let _ = common::method_not_allowed(req);
+                return;
+            }
+        };
 
         let source_name_enc = &url["/source/".len()..];
         let source_name_dec = percent_decode(source_name_enc.as_bytes());
@@ -99,10 +113,24 @@ pub fn dispatch(req: Request, log: Logger, edicast: &Edicast) {
             }
         };
 
-        let io = req.upgrade("icecast", Response::empty(200));
+        let decoder_result = match source_kind {
+            SourceKind::IcecastLegacy => {
+                // responding with connection upgrade is not strictly
+                // necessary per the legacy protocol, but is needed to
+                // enable the non-standard protocol to work properly
+                // through proxies which expect conforming requests
+                eprintln!("---> legacy");
+                let io = req.upgrade("icecast", Response::empty(200));
+                init_decoder(media_type, io)
+            }
+            SourceKind::Icecast24Put => {
+                // tiny-http automatically response 100-Continue for us:
+                init_decoder(media_type, RequestBody(req))
+            }
+        };
 
-        let pcm_read = match init_decoder(media_type, io) {
-            Ok(pcm_read) => pcm_read,
+        let decoder = match decoder_result {
+            Ok(decoder) => decoder,
             Err(msg) => {
                 slog::error!(log, "Error initialising decoder";
                     "error" => msg);
@@ -110,7 +138,7 @@ pub fn dispatch(req: Request, log: Logger, edicast: &Edicast) {
             }
         };
 
-        match source.start(pcm_read) {
+        match source.start(decoder) {
             Ok(()) => {}
             Err(()) => panic!("the source thread must have died or something?"),
         }
@@ -119,11 +147,11 @@ pub fn dispatch(req: Request, log: Logger, edicast: &Edicast) {
     }
 }
 
-fn method_allowed(method: &tiny_http::Method) -> bool {
-    match method {
-        // SOURCE is sent by legacy icecast clients
-        Method::NonStandard(method) if method == "SOURCE" => true,
-        Method::Put => true,
-        _ => false,
+struct RequestBody(tiny_http::Request);
+
+impl Read for RequestBody {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let reader = self.0.as_reader();
+        reader.read(buf)
     }
 }
