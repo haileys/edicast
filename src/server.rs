@@ -1,11 +1,10 @@
 use std::collections::HashMap;
-use std::io;
 use std::net::SocketAddr;
 use std::sync::mpsc::{self, SyncSender};
 
 use crossbeam::thread::Scope;
 use slog::Logger;
-use tiny_http::{NewServerError, Request};
+use tiny_http::Request;
 
 use crate::config::Config;
 use crate::source::SourceSet;
@@ -43,7 +42,7 @@ impl Edicast {
 
 #[derive(Debug)]
 pub enum StartError {
-    Bind(SocketAddr, io::Error),
+    Bind(SocketAddr, Box<dyn std::error::Error + Send + Sync + 'static>),
 }
 
 fn channel_iterate<'a, T, Iter>(
@@ -63,6 +62,11 @@ fn channel_iterate<'a, T, Iter>(
     });
 }
 
+enum IncomingRequest {
+    Public(Request),
+    Control(Request),
+}
+
 pub fn run(log: Logger, config: Config) -> Result<(), StartError> {
     slog::info!(log, "Starting edicast";
         "public" => config.listen.public,
@@ -70,19 +74,12 @@ pub fn run(log: Logger, config: Config) -> Result<(), StartError> {
     );
 
     let public = tiny_http::Server::http(&config.listen.public)
-        .map_err(|NewServerError::Io(e)|
-            StartError::Bind(config.listen.public, e))?;
+        .map_err(|e| StartError::Bind(config.listen.public, e))?;
 
     let control = tiny_http::Server::http(&config.listen.control)
-        .map_err(|NewServerError::Io(e)|
-            StartError::Bind(config.listen.public, e))?;
+        .map_err(|e| StartError::Bind(config.listen.public, e))?;
 
     let edicast = Edicast::new(log.clone(), config);
-
-    enum IncomingRequest {
-        Public(Request),
-        Control(Request),
-    }
 
     crossbeam::scope(|scope| {
         let requests = {
@@ -98,17 +95,10 @@ pub fn run(log: Logger, config: Config) -> Result<(), StartError> {
         };
 
         for req in requests {
-            let name = match &req {
-                IncomingRequest::Public(req) => {
-                    format!("edicast/public: {} {} {:40}", req.remote_addr(), req.method(), req.url())
-                }
-                IncomingRequest::Control(req) => {
-                    format!("edicast/control: {} {} {:40}", req.remote_addr(), req.method(), req.url())
-                }
-            };
+            let thread_name = thread_name(&req);
 
             let result = scope.builder()
-                .name(name.clone())
+                .name(thread_name.clone())
                 .spawn({
                     let edicast = &edicast;
                     let log = log.clone();
@@ -125,11 +115,31 @@ pub fn run(log: Logger, config: Config) -> Result<(), StartError> {
             if let Err(e) = result {
                 slog::crit!(log, "Could not spawn thread";
                     "error" => format!("{:?}", e),
-                    "name" => name,
+                    "name" => thread_name,
                 );
             }
         }
     }).expect("scoped thread panicked");
 
     Ok(())
+}
+
+fn thread_name(req: &IncomingRequest) -> String {
+        let (label, req) = match &req {
+            IncomingRequest::Public(req) => {
+                ("edicast/public", req)
+            }
+            IncomingRequest::Control(req) => {
+                ("edicast/control", req)
+            }
+        };
+
+        let remote_addr = req.remote_addr()
+            .map(|a| a.to_string())
+            .unwrap_or_default();
+
+        let method = req.method();
+        let url = req.url();
+
+        format!("{label}: {remote_addr} {method} {url:40}")
 }

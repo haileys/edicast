@@ -8,7 +8,7 @@ pub fn request_log_keys(request: &Request) -> OwnedKVList {
         "method" => request.method().to_string(),
         "url" => request.url().to_string(),
         "http_version" => request.http_version().to_string(),
-        "remote_addr" => request.remote_addr().to_string(),
+        "remote_addr" => request.remote_addr().map(|a| a.to_string()).unwrap_or_default(),
     }).into()
 }
 

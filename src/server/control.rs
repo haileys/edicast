@@ -46,13 +46,10 @@ pub fn dispatch(req: Request, log: Logger, edicast: &Edicast) {
     let url = req.url();
 
     if url.starts_with("/source/") {
-        match req.method() {
-            Method::Source | Method::Put => {},
-            _ => {
-                let _ = common::method_not_allowed(req);
-                return;
-            }
-        };
+        if !method_allowed(req.method()) {
+            let _ = common::method_not_allowed(req);
+            return;
+        }
 
         let source_name_enc = &url["/source/".len()..];
         let source_name_dec = percent_decode(source_name_enc.as_bytes());
@@ -119,5 +116,14 @@ pub fn dispatch(req: Request, log: Logger, edicast: &Edicast) {
         }
     } else {
         let _ = common::not_found(req);
+    }
+}
+
+fn method_allowed(method: &tiny_http::Method) -> bool {
+    match method {
+        // SOURCE is sent by legacy icecast clients
+        Method::NonStandard(method) if method == "SOURCE" => true,
+        Method::Put => true,
+        _ => false,
     }
 }
