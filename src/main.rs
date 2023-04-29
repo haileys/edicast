@@ -6,6 +6,10 @@ mod source;
 mod stream;
 mod sync;
 
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;
+
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process;
