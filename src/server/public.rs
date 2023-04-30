@@ -38,7 +38,9 @@ enum RunResult {
 }
 
 fn run_listener(req: Request, log: Logger, edicast: &Edicast) -> Result<RunResult, io::Error> {
-    let stream_id = match edicast.public_routes.get(req.url()) {
+    let path = req.url().split('?').nth(0).unwrap();
+
+    let stream_id = match edicast.public_routes.get(path) {
         Some(stream_id) => stream_id,
         None => {
             let _ = common::not_found(req);
@@ -66,6 +68,7 @@ fn run_listener(req: Request, log: Logger, edicast: &Edicast) -> Result<RunResul
         StatusCode(200),
         vec![
             Header::from_bytes("content-type".as_bytes(), content_type.as_bytes()).unwrap(),
+            Header::from_bytes("cache-control".as_bytes(), "no-store".as_bytes()).unwrap(),
         ],
         Reader::new(stream),
         None,
