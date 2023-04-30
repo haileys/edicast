@@ -1,12 +1,14 @@
-use std::io::{self, ErrorKind};
+use std::io::{self, ErrorKind, Read, Cursor};
+use std::sync::Arc;
 
 use slog::Logger;
-use tiny_http::Request;
+use tiny_http::{Request, Response, StatusCode, Header};
 use uuid::Uuid;
 
 use super::common;
 use super::Edicast;
 use crate::audio::encode;
+use crate::stream::StreamSubscription;
 
 pub fn dispatch(req: Request, log: Logger, edicast: &Edicast) {
     let request_id = Uuid::new_v4();
@@ -60,18 +62,60 @@ fn run_listener(req: Request, log: Logger, edicast: &Edicast) -> Result<RunResul
         common::request_log_keys(&req),
     );
 
-    let mut response = req.into_writer();
-    write!(response, "HTTP/1.1 200 OK\r\nContent-Type: {}\r\n\r\n", content_type)?;
+    req.respond(Response::new(
+        StatusCode(200),
+        vec![
+            Header::from_bytes("content-type".as_bytes(), content_type.as_bytes()).unwrap(),
+        ],
+        Reader::new(stream),
+        None,
+        None,
+    ))?;
 
-    loop {
-        match stream.recv() {
-            Ok(data) => {
-                response.write_all(&data)?;
-            }
-            Err(_) => {
-                // publisher went away, terminate stream
-                return Ok(RunResult::StreamEnd);
+    Ok(RunResult::StreamEnd)
+}
+
+struct Reader {
+    recv: StreamSubscription,
+    buffer: Option<Cursor<Arc<[u8]>>>,
+}
+
+impl Reader {
+    pub fn new(recv: StreamSubscription) -> Self {
+        Reader { recv, buffer: None }
+    }
+}
+
+impl Read for Reader {
+    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+        let mut written = 0;
+
+        while written < out.len() {
+            match self.buffer.as_mut() {
+                Some(buffer) => {
+                    match buffer.read(&mut out[written..])? {
+                        0 => { self.buffer = None; }
+                        n => { written += n; }
+                    }
+                }
+                None => {
+                    let buffer = match written {
+                        // block on receiving next chunk if we've not yet
+                        // returned anything to the caller:
+                        0 => self.recv.recv().ok(),
+                        // attempt to read more data if we have, but don't
+                        // block:
+                        _ => match self.recv.try_recv() {
+                            Ok(buf) => Some(buf),
+                            Err(_) => { break; }
+                        },
+                    };
+
+                    self.buffer = buffer.map(Cursor::new);
+                }
             }
         }
+
+        Ok(written)
     }
 }
