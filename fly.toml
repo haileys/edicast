@@ -1,0 +1,23 @@
+# fly.toml app configuration file generated for edicast on 2023-04-29T21:58:06+10:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = "edicast"
+primary_region = "syd"
+
+[[services]]
+  internal_port = 8000
+  [[services.ports]]
+    handlers = ["tls"]
+    port = 443
+  [services.concurrency]
+    type = "connections"
+    hard_limit = 30000
+    soft_limit = 30000
+
+# [[services]]
+#   [[services.ports]]
+#     handlers = ["http"]
+#     port = 80
+#     force_https = true

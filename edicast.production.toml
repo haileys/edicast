@@ -1,0 +1,16 @@
+[listen]
+public = "[::]:8000"
+control = "[::]:3030"
+
+[source.edifm]
+offline = "silence"
+
+[stream.live]
+path = "/live.mp3"
+source = "edifm"
+codec = { mp3 = { bitrate = 320, quality = 0 } }
+
+[stream.low]
+path = "/low.mp3"
+source = "edifm"
+codec = { mp3 = { bitrate = 128, quality = 2 } }
