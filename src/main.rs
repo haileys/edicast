@@ -62,7 +62,8 @@ fn handle_config_error(log: &Logger, config_path: &Path, err: config::Error) {
     }
 }
 
-fn main() {
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
     // this inner function makes sure Logger instance is cleanly dropped and
     // any logged errors are properly flushed before we call process::exit
     fn run() -> Result<(), ()> {
