@@ -1,51 +1,88 @@
-use std::io::{self, ErrorKind, Read, Cursor};
+use std::net::SocketAddr;
 use std::sync::Arc;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
+use bytes::Bytes;
+use futures::Future;
+use http_body_util::BodyExt;
+use http_body_util::combinators::BoxBody;
+use hyper::body::{self, Body, Frame};
+use hyper::server::conn::http1;
+use hyper::{Request, Response, StatusCode};
 use slog::Logger;
-use tiny_http::{Request, Response, StatusCode, Header};
+use thiserror::Error;
 use uuid::Uuid;
 
+use crate::audio::encode;
+use crate::net;
+use crate::stream::StreamSubscription;
 use super::common;
 use super::Edicast;
-use crate::audio::encode;
-use crate::stream::StreamSubscription;
 
-pub fn dispatch(req: Request, log: Logger, edicast: &Edicast) {
+pub async fn start(address: SocketAddr, edicast: Arc<Edicast>)
+    -> Result<impl Future<Output = ()>, net::BindError>
+{
+    let listener = net::bind(address).await?;
+
+    let _ = crate::thread::spawn_worker("edicast/public", async move {
+        loop {
+            let log = slog_scope::logger().new(slog::o!("service" => "public"));
+
+            let (stream, peer) = match listener.accept().await {
+                Ok(result) => result,
+                Err(err) => {
+                    slog::warn!(log, "error accepting connection: {}", err);
+                    continue;
+                }
+            };
+
+            let service = hyper::service::service_fn({
+                let log = log.clone();
+                let edicast = edicast.clone();
+                move |mut req| {
+                    req.extensions_mut().insert(net::SocketPeer(peer));
+                    dispatch(req, log.clone(), edicast.clone())
+                }
+            });
+
+            tokio::task::spawn_local(async move {
+                let result = http1::Builder::new()
+                    .serve_connection(stream, service)
+                    .await;
+
+                match result {
+                    Ok(()) => {}
+                    Err(err) => {
+                        slog::warn!(log, "error serving connection: {}", err);
+                    }
+                }
+            });
+        }
+    });
+
+    // accept loop in worker thread never terminates
+    Ok(futures::future::pending::<()>())
+}
+
+type DispatchResponse = Response<BoxBody<Bytes, ClientLagged>>;
+
+fn not_found() -> DispatchResponse {
+    common::status(StatusCode::NOT_FOUND)
+        .map(|body| body.map_err(|_| -> ClientLagged { unreachable!() }).boxed())
+}
+
+async fn dispatch(req: Request<body::Incoming>, log: Logger, edicast: Arc<Edicast>)
+    -> Result<DispatchResponse, ClientLagged>
+{
     let request_id = Uuid::new_v4();
     let log = log.new(slog::o!("request_id" => request_id));
 
-    match run_listener(req, log.clone(), edicast) {
-        Ok(RunResult::NotFound) => {
-            // don't print listener disconnected, we haven't printed listener connected yet
-        }
-        Ok(RunResult::StreamEnd) => {
-            // don't print listener disconnected since there could be a large
-            // number all at once. we'll log when instead ending the stream
-        }
-        Err(ref e) if e.kind() == ErrorKind::BrokenPipe => {
-            slog::info!(log, "Listener disconnected")
-        }
-        Err(e) => {
-            slog::warn!(log, "I/O error writing to listener, dropping";
-                "error" => e.to_string());
-        }
-    }
-}
-
-enum RunResult {
-    NotFound,
-    StreamEnd,
-}
-
-fn run_listener(req: Request, log: Logger, edicast: &Edicast) -> Result<RunResult, io::Error> {
-    let path = req.url().split('?').nth(0).unwrap();
+    let path = req.uri().path();
 
     let stream_id = match edicast.public_routes.get(path) {
         Some(stream_id) => stream_id,
-        None => {
-            let _ = common::not_found(req);
-            return Ok(RunResult::NotFound);
-        }
+        None => { return Ok(not_found()); }
     };
 
     let content_type = encode::mime_type_from_config(
@@ -53,72 +90,50 @@ fn run_listener(req: Request, log: Logger, edicast: &Edicast) -> Result<RunResul
 
     let stream = match edicast.streams.subscribe_stream(stream_id) {
         Some(stream) => stream,
-        None => {
-            let _ = common::not_found(req);
-            return Ok(RunResult::NotFound);
-        }
+        None => { return Ok(not_found()); }
     };
 
     slog::info!(log, "Listener connected";
         "stream" => stream_id,
-        common::request_log_keys(&req),
+        common::request_log_keys_hyper(&req),
     );
 
-    req.respond(Response::new(
-        StatusCode(200),
-        vec![
-            Header::from_bytes("content-type".as_bytes(), content_type.as_bytes()).unwrap(),
-            Header::from_bytes("cache-control".as_bytes(), "no-store".as_bytes()).unwrap(),
-        ],
-        Reader::new(stream),
-        None,
-        None,
-    ))?;
+    let response = Response::builder()
+        .header("content-type", content_type)
+        .header("cache-control", "no-store")
+        .status(StatusCode::OK)
+        .body(StreamBody(stream).boxed())
+        .expect("build response");
 
-    Ok(RunResult::StreamEnd)
+    Ok(response)
 }
 
-struct Reader {
-    recv: StreamSubscription,
-    buffer: Option<Cursor<Arc<[u8]>>>,
-}
+#[derive(Error, Debug)]
+#[error("client lagged too far behind stream")]
+pub struct ClientLagged;
 
-impl Reader {
-    pub fn new(recv: StreamSubscription) -> Self {
-        Reader { recv, buffer: None }
-    }
-}
+struct StreamBody(StreamSubscription);
 
-impl Read for Reader {
-    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
-        let mut written = 0;
+impl Body for StreamBody {
+    type Data = Bytes;
+    type Error = ClientLagged;
 
-        while written < out.len() {
-            match self.buffer.as_mut() {
-                Some(buffer) => {
-                    match buffer.read(&mut out[written..])? {
-                        0 => { self.buffer = None; }
-                        n => { written += n; }
-                    }
-                }
-                None => {
-                    let buffer = match written {
-                        // block on receiving next chunk if we've not yet
-                        // returned anything to the caller:
-                        0 => self.recv.recv().ok(),
-                        // attempt to read more data if we have, but don't
-                        // block:
-                        _ => match self.recv.try_recv() {
-                            Ok(buf) => Some(buf),
-                            Err(_) => { break; }
-                        },
-                    };
+    fn poll_frame(mut self: Pin<&mut Self>, cx: &mut Context<'_>)
+        -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>>
+    {
+        use tokio::sync::broadcast::error::RecvError;
 
-                    self.buffer = buffer.map(Cursor::new);
-                }
+        // recv is cancel-safe, so it's safe to call it again on every poll
+        let mut self_ = self.as_mut();
+        let recv = self_.0.recv();
+        futures::pin_mut!(recv);
+
+        recv.poll(cx).map(|result| {
+            match result {
+                Ok(bytes) => Some(Ok(Frame::data(bytes))),
+                Err(RecvError::Closed) => None,
+                Err(RecvError::Lagged(_)) => Some(Err(ClientLagged)),
             }
-        }
-
-        Ok(written)
+        })
     }
 }
