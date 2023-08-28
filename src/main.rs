@@ -1,10 +1,12 @@
 mod audio;
 mod config;
 mod fanout;
+mod net;
 mod server;
 mod source;
 mod stream;
 mod sync;
+mod thread;
 
 #[cfg(not(target_env = "msvc"))]
 #[global_allocator]
@@ -17,7 +19,6 @@ use std::process;
 use slog::{Drain, Logger};
 
 use config::Config;
-use server::StartError;
 
 fn logger() -> Logger {
     let decorator = slog_term::TermDecorator::new().build();
@@ -62,11 +63,13 @@ fn handle_config_error(log: &Logger, config_path: &Path, err: config::Error) {
     }
 }
 
-fn main() {
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
     // this inner function makes sure Logger instance is cleanly dropped and
     // any logged errors are properly flushed before we call process::exit
-    fn run() -> Result<(), ()> {
+    async fn run() -> Result<(), ()> {
         let log = logger();
+        let _ = slog_scope::set_global_logger(log.clone());
 
         let config_path = config_path();
 
@@ -79,13 +82,10 @@ fn main() {
             }
         };
 
-        match server::run(log.clone(), config) {
+        match server::run(log.clone(), config).await {
             Ok(()) => {}
-            Err(StartError::Bind(addr, err)) => {
-                slog::crit!(log, "Could not bind listener";
-                    "address" => addr,
-                    "error" => err.to_string(),
-                );
+            Err(error) => {
+                slog::crit!(log, "Error running server: {}", error);
                 return Err(());
             }
         }
@@ -93,7 +93,7 @@ fn main() {
         Ok(())
     }
 
-    match run() {
+    match run().await {
         Ok(()) => {}
         Err(()) => process::exit(1),
     }

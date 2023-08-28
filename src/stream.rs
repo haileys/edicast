@@ -4,17 +4,20 @@ use std::sync::mpsc::{Receiver, RecvError};
 use std::thread;
 
 use slog::Logger;
+use bytes::Bytes;
+use tokio::sync::broadcast;
 
 use crate::audio::PcmData;
 use crate::audio::encode;
 use crate::config::StreamConfig;
-use crate::fanout::{live_channel, LivePublisher, LiveSubscriber};
 use crate::source::SourceSet;
 
-pub type StreamSubscription = Receiver<Arc<[u8]>>;
+const BUFFER_SIZE: usize = 8;
+
+pub type StreamSubscription = broadcast::Receiver<Bytes>;
 
 pub struct StreamSet {
-    stream_outputs: HashMap<String, LiveSubscriber<Arc<[u8]>>>,
+    stream_outputs: HashMap<String, broadcast::Sender<Bytes>>,
 }
 
 impl StreamSet {
@@ -22,7 +25,7 @@ impl StreamSet {
         let mut stream_outputs = HashMap::new();
 
         for (name, config) in config.iter() {
-            let (publisher, subscriber) = live_channel();
+            let (broadcast, _) = broadcast::channel(BUFFER_SIZE);
 
             let input = match source_set.source_stream(&config.source) {
                 Some(source) => source,
@@ -41,7 +44,7 @@ impl StreamSet {
                 input: input,
                 log: log.clone(),
                 name: name.clone(),
-                output: publisher,
+                output: broadcast.clone(),
             };
 
             thread::Builder::new()
@@ -49,7 +52,7 @@ impl StreamSet {
                 .spawn(move || stream_thread_main(source))
                 .expect("spawn edicast stream thread");
 
-            stream_outputs.insert(name.to_string(), subscriber);
+            stream_outputs.insert(name.to_string(), broadcast);
         }
 
         StreamSet { stream_outputs }
@@ -57,7 +60,7 @@ impl StreamSet {
 
     pub fn subscribe_stream(&self, name: &str) -> Option<StreamSubscription> {
         self.stream_outputs.get(name)
-            .and_then(|subscriber| subscriber.subscribe().ok())
+            .map(|subscriber| subscriber.subscribe())
     }
 }
 
@@ -66,7 +69,7 @@ pub struct StreamThreadContext {
     input: Receiver<Arc<PcmData>>,
     log: Logger,
     name: String,
-    output: LivePublisher<Arc<[u8]>>,
+    output: broadcast::Sender<Bytes>,
 }
 
 fn stream_thread_main(stream: StreamThreadContext) {
@@ -83,7 +86,7 @@ fn stream_thread_main(stream: StreamThreadContext) {
         match stream.input.recv() {
             Ok(pcm) => {
                 let encoded = codec.encode(&pcm);
-                stream.output.publish(encoded.into());
+                let _ = stream.output.send(encoded.into());
             }
             Err(RecvError) => {
                 panic!("source stream terminated unexpectedly!");
