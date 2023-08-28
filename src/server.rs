@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::mpsc::{self, SyncSender};
+use std::sync::Arc;
 
-use crossbeam::thread::Scope;
 use slog::Logger;
-use tiny_http::Request;
+use thiserror::Error;
 
 use crate::config::Config;
+use crate::net;
 use crate::source::SourceSet;
 use crate::stream::StreamSet;
 
@@ -40,100 +40,57 @@ impl Edicast {
     }
 }
 
-#[derive(Debug)]
+#[derive(Error, Debug)]
 pub enum StartError {
+    #[error("could not bind {0}: {1}")]
     Bind(SocketAddr, Box<dyn std::error::Error + Send + Sync + 'static>),
+    #[error(transparent)]
+    Public(#[from] net::BindError),
 }
 
-fn channel_iterate<'a, T, Iter>(
-    scope: &Scope<'a>,
-    sender: SyncSender<T>,
-    iter: Iter,
-) where
-    T: Send + 'a,
-    Iter: IntoIterator<Item = T> + Send + 'a
-{
-    scope.spawn(move |_| {
-        for item in iter {
-            if let Err(_) = sender.send(item) {
-                break;
-            }
-        }
-    });
-}
-
-enum IncomingRequest {
-    Public(Request),
-    Control(Request),
-}
-
-pub fn run(log: Logger, config: Config) -> Result<(), StartError> {
+pub async fn run(log: Logger, config: Config) -> Result<(), StartError> {
     slog::info!(log, "Starting edicast";
         "public" => config.listen.public,
         "control" => config.listen.control,
     );
 
-    let public = tiny_http::Server::http(&config.listen.public)
-        .map_err(|e| StartError::Bind(config.listen.public, e))?;
+    let edicast = Arc::new(Edicast::new(log.clone(), config));
 
-    let control = tiny_http::Server::http(&config.listen.control)
-        .map_err(|e| StartError::Bind(config.listen.public, e))?;
+    // run public server
+    let public = public::start(edicast.config.listen.public, edicast.clone()).await?;
 
-    let edicast = Edicast::new(log.clone(), config);
+    // setup + run control server
+    let control_listener = tiny_http::Server::http(&edicast.config.listen.control)
+        .map_err(|e| StartError::Bind(edicast.config.listen.control, e))?;
 
-    crossbeam::scope(|scope| {
-        let requests = {
-            let (reqs_tx, reqs_rx) = mpsc::sync_channel(0);
+    let control = crate::thread::spawn_worker("edicast/control", async move {
+        crossbeam::scope(|scope| {
+            for req in control_listener.incoming_requests() {
+                let thread_name = thread_name(&req);
 
-            channel_iterate(scope, reqs_tx.clone(),
-                public.incoming_requests().map(IncomingRequest::Public));
+                let result = scope.builder()
+                    .name(thread_name.clone())
+                    .spawn({
+                        let edicast = &edicast;
+                        let log = log.clone();
+                        move |_| control::dispatch(req, log, edicast)
+                    });
 
-            channel_iterate(scope, reqs_tx.clone(),
-                control.incoming_requests().map(IncomingRequest::Control));
-
-            reqs_rx
-        };
-
-        for req in requests {
-            let thread_name = thread_name(&req);
-
-            let result = scope.builder()
-                .name(thread_name.clone())
-                .spawn({
-                    let edicast = &edicast;
-                    let log = log.clone();
-                    move |_| match req {
-                        IncomingRequest::Public(req) => {
-                            public::dispatch(req, log, edicast)
-                        }
-                        IncomingRequest::Control(req) => {
-                            control::dispatch(req, log, edicast)
-                        }
-                    }
-                });
-
-            if let Err(e) = result {
-                slog::crit!(log, "Could not spawn thread";
-                    "error" => format!("{:?}", e),
-                    "name" => thread_name,
-                );
+                if let Err(e) = result {
+                    slog::crit!(log, "Could not spawn thread";
+                        "error" => format!("{:?}", e),
+                        "name" => thread_name,
+                    );
+                }
             }
-        }
-    }).expect("scoped thread panicked");
+        }).expect("scoped thread panicked");
+    });
 
+    futures::future::join(public, control).await;
     Ok(())
 }
 
-fn thread_name(req: &IncomingRequest) -> String {
-        let (label, req) = match &req {
-            IncomingRequest::Public(req) => {
-                ("edicast/public", req)
-            }
-            IncomingRequest::Control(req) => {
-                ("edicast/control", req)
-            }
-        };
-
+fn thread_name(req: &tiny_http::Request) -> String {
         let remote_addr = req.remote_addr()
             .map(|a| a.to_string())
             .unwrap_or_default();
@@ -141,5 +98,5 @@ fn thread_name(req: &IncomingRequest) -> String {
         let method = req.method();
         let url = req.url();
 
-        format!("{label}: {remote_addr} {method} {url:40}")
+        format!("edicast/control: {remote_addr} {method} {url:40}")
 }
